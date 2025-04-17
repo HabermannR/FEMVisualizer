@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>FEM Element Visualization</title>
+    <link rel="stylesheet" href="styles.css">
+    <script type="module" src="script_sm.js" defer></script>
+</head>
+<body>
+    <button id="toggleControlsBtn" class="controls-toggler" aria-label="Toggle Controls" aria-expanded="true" aria-controls="controls">
+        <span class="icon-bar"></span> <!-- This span + ::before/::after will form the icon -->
+    </button>
+    <div class="main-container">
+        <div id="controls"></div>
+        <div class="canvas-container">
+            <div class="canvas-panel">
+                <h3>Physical Element (x,y)</h3>
+                <canvas id="femCanvas" width="400" height="400" style="width: 400px; height: 400px;"></canvas>
+            </div>
+            <div class="canvas-panel">
+                <h3 id="refElementTitle">Reference Element (ξ,η)<br>Shape Function N1</h3>
+                <canvas id="refCanvas" width="400" height="400" style="width: 400px; height: 400px;"></canvas>
+            </div>
+            <div class="canvas-panel">
+                <h3 id="resultTitle">Result<br>Showing Displacement U₁</h3>
+                <canvas id="resultCanvas" width="400" height="400" style="width: 400px; height: 400px;"></canvas>
+            </div>
+        </div>
+        <div class="explanation-container">
+            <div id="shapeFunctions" class="matrix-display"></div>
+        </div>
+    </div>
+</body>
+</html>

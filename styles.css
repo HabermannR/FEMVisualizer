@@ -1,0 +1,255 @@
+/* --- Base Variables --- */
+:root {
+    --control-bg: #ffffff;
+    --control-border: #e1e4e8;
+    --button-bg: #ffffff;
+    --button-border: #d1d5db;
+    --button-text: #374151;
+    --button-hover-bg: #f9fafb;
+    --button-hover-border: #9ca3af;
+    --button-active-bg: #f3f4f6;
+    --button-selected-bg: #3b82f6;
+    --button-selected-text: #ffffff;
+    --button-selected-border: #2563eb;
+    --gauss-bg: #10b981;
+    --gauss-text: #ffffff;
+    --gauss-hover-bg: #059669;
+    --text-label: #4b5563;
+    --spacing-xs: 4px;
+    --spacing-sm: 6px;
+    --spacing-md: 8px;
+    --spacing-row: 10px;
+    --spacing-lg: 12px;
+    --border-radius: 6px;
+    --font-main: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    --font-mono: "SF Mono", "Monaco", monospace;
+    --font-formula: "Computer Modern", serif;
+    --toggler-size: 36px; /* Size of the toggle button */
+    --controls-max-height: 500px; /* Max expected height of controls */
+}
+
+/* --- Body & Container --- */
+body {
+    font-family: var(--font-main);
+    margin: 0;
+    padding: 0;
+    color: #2c3e50;
+    background-color: #f0f2f5;
+    overflow: hidden; /* Prevent body scroll */
+}
+
+.main-container {
+    height: 100vh;
+    display: flex;
+    flex-direction: column; /* Vertical layout: Controls -> Canvas -> Explanation */
+    overflow: hidden; /* Contains elements */
+}
+
+/* --- Control Bar (#controls) - Always Top, Toggleable --- */
+#controls {
+    display: flex;
+    flex-direction: column; /* Stack rows vertically */
+    align-items: center;
+    gap: var(--spacing-row);
+    padding: var(--spacing-md);
+    background: var(--control-bg);
+    border-bottom: 1px solid var(--control-border);
+    box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+    flex-shrink: 0; /* Prevent controls from shrinking vertically */
+    width: 100%; /* Full width */
+    box-sizing: border-box; /* Include padding in width */
+
+    /* --- Toggle Animation --- */
+    max-height: var(--controls-max-height); /* Start visible */
+    overflow: hidden; /* Clip content during transition */
+    transition: max-height 0.35s ease-in-out, padding 0.35s ease-in-out, border-width 0.35s ease-in-out;
+}
+
+/* --- State When Controls are HIDDEN --- */
+body.controls-hidden #controls,
+body.controls-hidden .canvas-container { /* <--- ADDED .canvas-container here */
+    max-height: 0;
+    padding-top: 0;
+    padding-bottom: 0;
+    border-bottom-width: 0;
+}
+
+/* --- Control Rows (Layout within the top bar) --- */
+.control-row {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    align-items: center;
+    gap: var(--spacing-md);
+    width: 100%;
+}
+
+/* --- Generic Button & Group Styles --- */
+.button-group { display: inline-flex; align-items: center; gap: var(--spacing-sm); }
+button { padding: 6px 12px; border: 1px solid var(--button-border); border-radius: var(--border-radius); background-color: var(--button-bg); color: var(--button-text); font-size: 14px; font-weight: 500; cursor: pointer; transition: all 0.15s ease-in-out; display: inline-flex; align-items: center; justify-content: center; min-height: 32px; line-height: 1; white-space: nowrap; box-shadow: 0 1px 2px rgba(0,0,0,0.03); }
+button:hover { background-color: var(--button-hover-bg); border-color: var(--button-hover-border); transform: translateY(-1px); box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+button:active { background-color: var(--button-active-bg); transform: translateY(0); box-shadow: inset 0 1px 2px rgba(0,0,0,0.05); }
+button.selected { background-color: var(--button-selected-bg); color: var(--button-selected-text); border-color: var(--button-selected-border); box-shadow: none; }
+button.selected:hover { background-color: var(--button-selected-border); border-color: var(--button-selected-border); }
+.shape-button { min-width: 50px; font-family: var(--font-formula); }
+.toggle-button { min-width: 100px; }
+.toggle-button.active { background-color: var(--button-selected-bg); color: var(--button-selected-text); border-color: var(--button-selected-border); }
+#derivativeControls { display: inline-flex; gap: var(--spacing-sm); align-items: center; vertical-align: middle; }
+.derivative-button { min-width: 60px; font-family: var(--font-formula); padding: 6px 8px; }
+#derivativeControls button.selected { background-color: var(--button-selected-bg); color: var(--button-selected-text); border-color: var(--button-selected-border); }
+#derivativeControls button.selected:hover { background-color: var(--button-selected-border); }
+.gauss-button { background-color: var(--gauss-bg); color: var(--gauss-text); border: none; min-width: 110px; }
+.gauss-button:hover { background-color: var(--gauss-hover-bg); border: none; transform: translateY(-1px); }
+.gauss-button:active { background-color: var(--gauss-hover-bg); transform: translateY(0); box-shadow: inset 0 1px 2px rgba(0,0,0,0.1); }
+.group-label { font-size: 14px; font-weight: 500; color: var(--text-label); margin-right: var(--spacing-xs); white-space: nowrap; }
+.view-button { min-width: 65px; font-family: var(--font-formula); }
+.control-separator { display: inline-block; width: 1px; height: 24px; background-color: var(--control-border); vertical-align: middle; margin: 0 var(--spacing-sm); }
+
+/* --- Toggle Button Styling (Always Visible) --- */
+.controls-toggler {
+    display: inline-flex;
+    position: fixed;
+    top: 8px;
+    left: 10px;
+    z-index: 1001;
+    width: var(--toggler-size); /* 36px */
+    height: var(--toggler-size); /* 36px */
+    padding: 0; /* Important: Remove padding if any default exists */
+    background-color: var(--button-selected-bg);
+    color: var(--button-selected-text); /* Color used for the icon bars */
+    border: 1px solid var(--button-selected-border);
+    border-radius: var(--border-radius);
+    cursor: pointer;
+    /* font-size: 16px; */ /* No longer needed for font icon */
+    box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+    transition: background-color 0.2s ease;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden; /* Prevent bars animating outside bounds */
+}
+.controls-toggler:hover {
+    background-color: var(--button-selected-border);
+}
+/* Common style for all 3 bars (middle span, ::before, ::after) */
+.controls-toggler .icon-bar,
+.controls-toggler::before,
+.controls-toggler::after {
+    content: '';
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%); /* Center horizontally */
+    height: 3px;  /* Thickness of the bars */
+    width: 20px;  /* Length of the bars (adjust as needed) */
+    background-color: currentColor; /* Use button's text color */
+    border-radius: 2px; /* Slightly rounded ends */
+    transition: all 0.3s ease-in-out;
+}
+
+/* Positioning for the Burger Menu (when controls are hidden) */
+/* State: aria-expanded="false" */
+.controls-toggler[aria-expanded="false"]::before {
+    /* Top bar */
+    top: 10px; /* Adjust vertical position */
+    transform: translate(-50%, 0); /* Reset transform */
+}
+
+.controls-toggler[aria-expanded="false"] .icon-bar {
+    /* Middle bar */
+    top: 50%;
+    transform: translate(-50%, -50%); /* Center vertically */
+    opacity: 1;
+}
+
+.controls-toggler[aria-expanded="false"]::after {
+    /* Bottom bar */
+    bottom: 10px; /* Adjust vertical position */
+    /* or top: calc(50% + 7px); depending on exact spacing desired */
+     transform: translate(-50%, 0); /* Reset transform */
+}
+
+
+/* Transformations for the Close Icon ('X') (when controls are visible) */
+/* State: aria-expanded="true" (Initial State) */
+.controls-toggler[aria-expanded="true"]::before {
+    /* Top bar rotates down */
+    top: 50%;
+    transform: translate(-50%, -50%) rotate(45deg);
+}
+
+.controls-toggler[aria-expanded="true"] .icon-bar {
+    /* Middle bar fades out */
+    opacity: 0;
+}
+
+.controls-toggler[aria-expanded="true"]::after {
+    /* Bottom bar rotates up */
+    top: 50%; /* Bring to center */
+    /* bottom: auto; Reset bottom if it was set */
+    transform: translate(-50%, -50%) rotate(-45deg);
+}
+
+/* --- Canvas Area --- */
+.canvas-container {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-around;
+    gap: 16px;
+    padding: 12px;
+    background: #f8fafc;
+    flex-shrink: 0; /* Prevent shrinking */
+     max-height: var(--canvas-container-max-height); /* Start visible */
+    overflow: hidden; /* Clip content during transition */
+    transition: max-height 0.35s ease-in-out,
+                padding-top 0.35s ease-in-out,
+                padding-bottom 0.35s ease-in-out;
+                /* Add border transition if it had one */
+    box-sizing: border-box; /* Good practice */
+}
+
+.canvas-panel {
+    flex: 1 1 auto;
+    text-align: center;
+    min-width: 250px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+}
+
+.canvas-panel h3 { margin-bottom: 10px; color: #34495e; font-weight: 500; font-size: 1em; line-height: 1.3; }
+canvas { max-width: 100%; object-fit: contain; border: 1px solid var(--control-border); border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.04); background-color: #fff; }
+
+/* --- Explanation/Scrolling Container --- */
+.explanation-container {
+    flex: 1; /* Takes remaining vertical space */
+    overflow-y: auto; /* Enables vertical scroll */
+    padding: 16px;
+    background: #ffffff;
+    min-height: 0; /* Fix flexbox overflow */
+    transition: margin-top 0.35s ease-in-out;
+    /* This area will naturally expand upwards when #controls collapses */
+}
+
+#shapeFunctions, .matrix-display { overflow: visible !important; max-height: none !important; }
+.formula-explanation, .stiffness-matrix, .gauss-contribution, .gauss-point-results { margin: 12px 0; padding: 12px; background-color: #f8fafc; border-radius: 8px; border: 1px solid var(--control-border); box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
+.formula { font-family: var(--font-formula); background-color: #f8fafc; padding: 16px; margin: 10px 0; border-left: 3px solid var(--button-selected-bg); border-radius: 4px; box-shadow: 0 1px 3px rgba(0,0,0,0.05); overflow-x: auto; }
+details { margin: 8px 0; padding: 8px; border: 1px solid #ddd; border-radius: var(--border-radius); }
+summary { cursor: pointer; padding: 4px; }
+summary h4 { display: inline; margin: 0; }
+.matrix-explanation, .stress-explanation { margin-top: 16px; padding: 8px; background-color: #fff; border: 1px solid #ddd; border-radius: 5px; }
+.matrix-explanation ul, .stress-explanation ul { margin: 0; padding-left: 16px; }
+.matrix-explanation li, .stress-explanation li { margin: 5px 0; }
+.von-mises-value { margin: 8px 0; padding: 8px; background-color: #f8fafc; border-left: 3px solid var(--button-selected-bg); border-radius: 4px; font-family: var(--font-formula); overflow-x: auto; }
+.matrix-container { display: inline-block; margin: 10px 0; border: 1px solid var(--control-border); border-radius: 8px; background: #ffffff; box-shadow: 0 1px 3px rgba(0,0,0,0.05); overflow-x: auto; max-width: 100%; }
+.matrix { display: table; border-collapse: collapse; background: white; }
+.matrix-row { display: table-row; }
+.matrix-cell { display: table-cell; padding: 6px 10px; border: 1px solid #ddd; text-align: right; font-family: var(--font-mono); box-sizing: border-box; background: white; white-space: pre; position: relative; }
+.matrix-header { background-color: #f0f2f5; font-weight: 500; border-bottom: 2px solid var(--control-border); color: #34495e; text-align: center; }
+
+.matrix-equation-container {
+  display: flex; /* Enables Flexbox layout */
+  align-items: center; /* Aligns items vertically in the center */
+  justify-content: left; /* Optional: centers the whole group horizontally if container width allows */
+  gap: 30px; /* Adds space between the matrices and the symbols */
+  flex-wrap: wrap; /* Allows items to wrap onto the next line on smaller screens */
+  margin-bottom: 20px; /* Add some space below the equation */
+}
