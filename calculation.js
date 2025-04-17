@@ -256,7 +256,7 @@ export function calculateStrainAndStress(nodes, displacements) {
         const J = calculateJacobiMatrix(dNdXi, nodes);
         const detJ = calculateDeterminant(J);
         if (detJ <= 0) {
-            console.error(`[GP ${index + 1}] Invalid Jacobian determinant: ${detJ}. Skipping point.`);
+            // console.error(`[GP ${index + 1}] Invalid Jacobian determinant: ${detJ}. Skipping point.`);
             // Handle error appropriately - maybe push null or throw error
             // For now, just log and continue to avoid crashing if possible
              results.push({
@@ -395,52 +395,103 @@ function multiplyMatrixVector(matrix, vector) {
 
 // Extrapolation function using the precomputed inverse
 export function extrapolateGaussToNodes(gaussResults, componentKey) {
-    // componentKey is like 'Sxx', 'Eyy', etc.
-    const gaussValues = [];
+    // componentKey is like 'Sxx', 'Eyy', 'Svm', etc.
 
-    if (!gaussResults || gaussResults.length !== 4) {
-        console.error("Invalid gaussResults for extrapolation");
-        return [0, 0, 0, 0]; // Return zero array on error
+    // Initial validation of the results array structure
+    if (!gaussResults || !Array.isArray(gaussResults) || gaussResults.length !== 4) {
+        console.error(`[Extrapolation ${componentKey}] Invalid or incomplete gaussResults provided (expected array of 4). Got:`, gaussResults);
+        return [0, 0, 0, 0]; // Return zero array on structural error
     }
 
-    // Determine where the value lives (stress, strain, vonMises)
+    // Determine the path to the desired value within a valid result object
     let path;
     if (componentKey === 'Svm') {
-         path = ['vonMises'];
+        path = ['vonMises'];
     } else if (componentKey.startsWith('S')) {
-        path = ['stress', componentKey === 'Sxx' ? 'σxx' : componentKey === 'Syy' ? 'σyy' : 'τxy'];
+        // Map frontend key (Sxx) to backend key (σxx)
+        const stressKey = componentKey === 'Sxx' ? 'σxx' : componentKey === 'Syy' ? 'σyy' : 'τxy';
+        path = ['stress', stressKey];
     } else if (componentKey.startsWith('E')) {
-        path = ['strain', componentKey === 'Exx' ? 'εxx' : componentKey === 'Eyy' ? 'εyy' : 'γxy'];
+        // Map frontend key (Exx) to backend key (εxx)
+        const strainKey = componentKey === 'Exx' ? 'εxx' : componentKey === 'Eyy' ? 'εyy' : 'γxy';
+        path = ['strain', strainKey];
     } else {
-        console.error("Unknown component key for extrapolation:", componentKey);
-        return [0, 0, 0, 0];
+        console.error(`[Extrapolation] Unknown component key: "${componentKey}"`);
+        return [0, 0, 0, 0]; // Return zero array for unknown key
     }
 
-    try {
-        for (let i = 0; i < 4; i++) {
-            let value = gaussResults[i];
+    const gaussValues = [];
+    let encounteredIssues = false; // Flag if any default value was used
+
+    for (let i = 0; i < 4; i++) {
+        const result = gaussResults[i];
+        let value = 0; // Default value if extraction fails
+
+        if (!result) {
+            console.warn(`[Extrapolation ${componentKey}] Missing result object for GP ${i + 1}. Using default value 0.`);
+            encounteredIssues = true;
+
+        } else if (result.error) {
+            // --- Explicit Check for Calculation Error ---
+            console.warn(`[Extrapolation ${componentKey}] Calculation error encountered at GP ${i + 1}: "${result.error}". Using default value 0.`);
+            encounteredIssues = true;
+
+        } else {
+            // --- Attempt to Extract Value using Path ---
+            let current = result;
+            let validPath = true;
             for (const p of path) {
-                value = value[p];
+                // Check if the next step in the path is valid
+                if (current && typeof current === 'object' && Object.prototype.hasOwnProperty.call(current, p)) {
+                    current = current[p]; // Move down the path
+                } else {
+                    console.warn(`[Extrapolation ${componentKey}] Invalid data structure or missing path segment "${p}" for GP ${i + 1}. Result object:`, result, `Path: ${path.join('.')}. Using default value 0.`);
+                    current = 0; // Assign default
+                    validPath = false;
+                    encounteredIssues = true;
+                    break; // Stop traversing this path
+                }
             }
-             if (typeof value !== 'number' || !isFinite(value)) {
-                 console.warn(`Invalid value found during extrapolation for ${componentKey} at GP ${i}:`, value);
-                 value = 0; // Assign 0 if invalid
-             }
-            gaussValues.push(value);
+
+            // After traversing the path, check if the final value is a valid number
+            if (validPath) { // Only check the final value if the path itself was valid
+                if (typeof current === 'number' && isFinite(current)) {
+                    value = current; // Success! Use the extracted value
+                } else {
+                    console.warn(`[Extrapolation ${componentKey}] Extracted value at GP ${i + 1} is not a finite number (${current}). Using default value 0.`);
+                    value = 0; // Use default if NaN, Infinity, or wrong type
+                    encounteredIssues = true;
+                }
+            } else {
+                 value = 0; // Already defaulted during path traversal failure
+            }
         }
-    } catch (e) {
-        console.error(`Error accessing component ${componentKey} in gaussResults:`, e);
-        return [0, 0, 0, 0];
+        gaussValues.push(value);
     }
 
+     if (encounteredIssues) {
+         console.warn(`[Extrapolation ${componentKey}] Extrapolation completed, but default values (0) were used for one or more Gauss points due to errors or invalid data.`);
+     }
 
     // Perform extrapolation: NodalValues = N_inv * GaussValues
+    // Inverse of shape functions evaluated at Gauss points for bilinear quad
     const N_inv = [
-      [ 1.8660254, -0.5      ,  0.1339746, -0.5      ],
-      [-0.5      ,  1.8660254, -0.5      ,  0.1339746],
-      [ 0.1339746, -0.5      ,  1.8660254, -0.5      ],
-      [-0.5      ,  0.1339746, -0.5      ,  1.8660254]
+        [ 1.8660254, -0.5      ,  0.1339746, -0.5      ],
+        [-0.5      ,  1.8660254, -0.5      ,  0.1339746],
+        [ 0.1339746, -0.5      ,  1.8660254, -0.5      ],
+        [-0.5      ,  0.1339746, -0.5      ,  1.8660254]
     ];
-    const nodalValues = multiplyMatrixVector(N_inv, gaussValues);
-    return nodalValues;
+
+    try {
+        const nodalValues = multiplyMatrixVector(N_inv, gaussValues);
+        // Final check if multiplication resulted in non-finite numbers
+        if (nodalValues.some(v => typeof v !== 'number' || !isFinite(v))) {
+             console.error(`[Extrapolation ${componentKey}] Matrix multiplication resulted in non-finite values. Returning zeros. Input Gauss values:`, gaussValues, `Result:`, nodalValues);
+             return [0, 0, 0, 0];
+        }
+        return nodalValues;
+    } catch (e) {
+        console.error(`[Extrapolation ${componentKey}] Error during matrix multiplication (multiplyMatrixVector):`, e, "Input Gauss values:", gaussValues);
+        return [0, 0, 0, 0]; // Fallback if multiplication itself fails
+    }
 }

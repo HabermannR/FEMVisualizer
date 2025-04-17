@@ -43,7 +43,7 @@ const NODE_RADIUS = 8;
 const NODE_OUTLINE_COLOR = 'black';
 const NODE_OUTLINE_WIDTH = 2;
 const NODE_LABEL_FONT = '14px Arial';
-const NODE_LABEL_COLOR = 'black'; // Or use COLORS.text if
+const NODE_LABEL_COLOR = 'black';
 
 const MARGIN = 40;
 
@@ -170,6 +170,7 @@ const controls = {
             if (!state.showingDerivative) {
                 state.derivativeType = '';
             } else {
+                // Default to xi if enabling derivative view
                 state.derivativeType = 'xi';
                 document.querySelector('[data-type="xi"]').classList.add('selected');
             }
@@ -510,7 +511,6 @@ const renderer = {
             const textOffsetX = -textWidth / 2; // Center horizontally
 
             // Vertical offset logic (similar to reference, assuming nodes 0,1 are 'bottom' and 2,3 are 'top' in a quad)
-            // Adjust this logic if your node numbering convention is different
             const textOffsetY = -(NODE_RADIUS + 5); // Above bottom nodes, below top nodes
 
             ctx.fillText(text, canvasPos.x + textOffsetX, canvasPos.y + textOffsetY);
@@ -1073,55 +1073,130 @@ const renderer = {
 
      // New function to draw values at Gauss Points on the result canvas
     drawGaussPointValues(ctx, canvas, scaledNodes, strainStressResults, viewConfig) {
-        if (!strainStressResults || !viewConfig) return;
+        // Basic validation for inputs
+        if (!ctx || !canvas || !scaledNodes || scaledNodes.length < 4 || !strainStressResults || !viewConfig) {
+            // console.warn("drawGaussPointValues: Missing required arguments.");
+            return;
+        }
 
         ctx.font = '10px Arial';
         ctx.fillStyle = 'black';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
 
-        state.standardGaussPoints.forEach((gp, index) => {
-            // Calculate deformed physical coordinates of the Gauss Point
-            const N = calculateShapeFunctions(gp.xi, gp.eta);
-            let deformedPhysX = 0;
-            let deformedPhysY = 0;
-            for(let i = 0; i < 4; i++) {
-                deformedPhysX += N[i] * scaledNodes[i].x;
-                deformedPhysY += N[i] * scaledNodes[i].y;
+        // Iterate through the results array directly
+        strainStressResults.forEach((result, index) => {
+            // --- Robustness Check ---
+            if (!result) {
+                // console.warn(`[GP ${index + 1}] Skipping draw: No result data found.`);
+                return; // Skip this iteration if result is missing
             }
 
-            // Convert deformed physical coordinates to canvas coordinates
-            const canvasPos = coordConversion.physicalToCanvas({ x: deformedPhysX, y: deformedPhysY }, canvas);
+            // Use the gaussPoint data stored within the result if available, otherwise fallback
+            // This ensures we use the correct coordinates even if it's an error result
+            const gp = result.gaussPoint || state.standardGaussPoints[index];
+            if (!gp || typeof gp.xi !== 'number' || typeof gp.eta !== 'number') {
+                console.warn(`[GP ${index + 1}] Skipping draw: Invalid or missing Gauss point coordinates.`);
+                return; // Cannot calculate position without valid GP coords
+            }
 
-            // Get the value for the current view at this Gauss point
+            let canvasPos;
+            try {
+                // Calculate deformed physical coordinates of the Gauss Point
+                const N = calculateShapeFunctions(gp.xi, gp.eta);
+                let deformedPhysX = 0;
+                let deformedPhysY = 0;
+                // Ensure we don't go out of bounds for scaledNodes
+                for (let i = 0; i < Math.min(4, scaledNodes.length); i++) {
+                    if (scaledNodes[i]) { // Check node exists
+                        deformedPhysX += N[i] * scaledNodes[i].x;
+                        deformedPhysY += N[i] * scaledNodes[i].y;
+                    } else {
+                         console.warn(`[GP ${index + 1}] Skipping draw: Missing node data at index ${i}.`);
+                         return; // Cannot calculate position accurately
+                    }
+                }
+                // Convert deformed physical coordinates to canvas coordinates
+                canvasPos = coordConversion.physicalToCanvas({ x: deformedPhysX, y: deformedPhysY }, canvas);
+
+            } catch (e) {
+                console.error(`[GP ${index + 1}] Error calculating position:`, e);
+                return; // Skip if position calculation fails
+            }
+
+            // --- Check for Calculation Error in Result ---
+            if (result.error) {
+                // Optionally, draw an indicator that calculation failed for this point
+                try {
+                    ctx.save(); // Save context state
+                    ctx.fillStyle = 'red';
+                    ctx.font = 'bold 12px Arial';
+                    ctx.fillText('!', canvasPos.x, canvasPos.y + 1); // Draw red exclamation mark
+                    ctx.restore(); // Restore context state (font, fillStyle)
+                    // console.warn(`[GP ${index + 1}] Calculation error reported: ${result.error}`);
+                } catch(drawError) {
+                     console.error(`[GP ${index + 1}] Error drawing error marker:`, drawError);
+                }
+                return; // Skip drawing the value due to the reported error
+            }
+
+            // --- If no error, proceed to get and draw the value ---
             let value;
-            const result = strainStressResults[index];
-             try {
-                if (viewConfig.group === 'Stress') {
+            try {
+                // Check if the required data structure exists before accessing it
+                if (viewConfig.group === 'Stress' && result.stress) {
                      const key = viewConfig.type === 'Sxx' ? 'σxx' : viewConfig.type === 'Syy' ? 'σyy' : 'τxy';
                      value = result.stress[key];
-                 } else if (viewConfig.group === 'Strain') {
+                 } else if (viewConfig.group === 'Strain' && result.strain) {
                       const key = viewConfig.type === 'Exx' ? 'εxx' : viewConfig.type === 'Eyy' ? 'εyy' : 'γxy';
                      value = result.strain[key];
-                 } else { // Displacement - tricky, GP value isn't directly stored, maybe interpolate? Skip for now.
+                 } else if (viewConfig.group === 'Displacement') {
                      return; // Don't draw values for displacement at GPs for now
+                 } else {
+                     // Handle cases where the group is Stress/Strain but the object is unexpectedly missing
+                     // console.warn(`[GP ${index + 1}] Missing ${viewConfig.group} data in valid result.`);
+                     return;
                  }
 
+                 // Check if a valid numeric value was retrieved
                 if (typeof value === 'number' && isFinite(value)) {
                     const displayValue = (value * viewConfig.factor).toFixed(viewConfig.dot);
+
                      // Draw a small background box for readability
                      const textWidth = ctx.measureText(displayValue).width;
                      ctx.fillStyle = 'rgba(255, 255, 255, 0.7)'; // Semi-transparent white
                      ctx.fillRect(canvasPos.x - textWidth / 2 - 2, canvasPos.y - 7, textWidth + 4, 14);
 
                      // Draw the text value
-                     ctx.fillStyle = 'black';
+                     ctx.fillStyle = 'black'; // Ensure text color is reset
                     ctx.fillText(displayValue, canvasPos.x, canvasPos.y);
+                 } else {
+                     // Handle cases where the key exists but the value is not a valid number (e.g., NaN)
+                     // console.warn(`[GP ${index + 1}] Invalid value found for ${viewConfig.group}/${viewConfig.type}:`, value);
+                     // Optionally draw 'NaN' or similar
+                     ctx.save();
+                     ctx.fillStyle = 'rgba(255, 255, 255, 0.7)';
+                     ctx.fillRect(canvasPos.x - 10, canvasPos.y - 7, 20, 14);
+                     ctx.fillStyle = 'orange'; // Use a different color for NaN/invalid
+                     ctx.fillText('N/A', canvasPos.x, canvasPos.y);
+                     ctx.restore();
                  }
 
-             } catch (e) {
-                 console.error("Error getting Gauss point value for display:", e);
-             }
+            } catch (e) {
+                 // This catch now handles errors *after* the initial error check
+                 // (e.g., issue with viewConfig, key access on potentially malformed but not 'error' result, drawing errors)
+                 console.error(`[GP ${index + 1}] Error processing or drawing value:`, e, "Result object:", result);
+                 // Optionally draw an error marker here too
+                 try {
+                     ctx.save();
+                     ctx.fillStyle = 'red';
+                     ctx.font = 'bold 12px Arial';
+                     ctx.fillText('!', canvasPos.x, canvasPos.y + 1);
+                     ctx.restore();
+                 } catch(drawError) {
+                     console.error(`[GP ${index + 1}] Error drawing error marker in catch block:`, drawError);
+                 }
+            }
         });
 
         // Reset alignment
@@ -1204,78 +1279,122 @@ const renderer = {
 
 // Event handlers
 const handlers = {
-    GlobalMouseUp() {
+    // Renamed from getMousePos to handle both mouse and touch
+    getEventPos(canvas, evt) {
+        const rect = canvas.getBoundingClientRect();
+        let touch = null;
+
+        if (evt.type.startsWith('touch')) {
+            // For touchstart, touchend, touchcancel use the relevant touch from changedTouches
+            // For touchmove, use the first active touch from touches
+            touch = (evt.type === 'touchmove') ? evt.touches[0] : evt.changedTouches[0];
+        }
+
+        const clientX = touch ? touch.clientX : evt.clientX;
+        const clientY = touch ? touch.clientY : evt.clientY;
+
+        // Check if coordinates are valid before calculating relative position
+        if (clientX === undefined || clientY === undefined) {
+             console.warn("Could not determine event coordinates.");
+             return { x: 0, y: 0 }; // Return origin as fallback
+        }
+
+        return {
+            x: clientX - rect.left,
+            y: clientY - rect.top
+        };
+    },
+
+    GlobalMouseUp(event) {
+        const wasDragging = state.isDragging || state.isDraggingGaussPoint;
+
         state.isDragging = false;
         state.isDraggingGaussPoint = false;
         state.selectedNode = null;
         state.force.isSelected = false;
         state.force.dragStart = null;
+
+         if (wasDragging) {
+            // console.log("Global up detected, drag ended.");
+         }
     },
 
     FemMouseDown(event) {
-        const mousePos = this.getMousePos(canvases.fem, event);
-        const nodeIndex = this.findSelectedNode(mousePos, canvases.fem);
+        const pos = this.getEventPos(canvases.fem, event);
+        const nodeIndex = this.findSelectedNode(pos, canvases.fem); // Find *any* node
 
-        if (this.isForceArrowSelected(mousePos)) {
-            this.initializeForceArrowDrag(mousePos);
-        } else if (nodeIndex !== -1) {
-            this.initializeNodeDrag(nodeIndex);
+        if (this.isForceArrowSelected(pos)) {
+            this.initializeForceArrowDrag(pos);
+        } else if (nodeIndex !== -1) { // Check if *any* node was found
+            this.initializeNodeDrag(nodeIndex); // Allow dragging any found node
         }
+        // No preventDefault here, allow default actions unless dragging starts
     },
 
     FemMouseMove(event) {
+        // Only proceed if a drag operation is active (either node or force)
         if (!state.isDragging) return;
 
-        const mousePos = this.getMousePos(canvases.fem, event);
-
-        if (state.force.isSelected) {
-            this.updateForceArrow(mousePos);
-        } else if (state.selectedNode !== null) {
-            this.updateNodePosition(mousePos);
+        // Prevent scrolling/zooming on touch devices during drag
+        if (event.type === 'touchmove') {
+            event.preventDefault();
         }
 
+        const pos = this.getEventPos(canvases.fem, event);
+
+        if (state.force.isSelected) {
+            this.updateForceArrow(pos);
+        } else if (state.selectedNode !== null) { // Check if a node is selected
+            this.updateNodePosition(pos); // Update the selected node's position
+        }
+
+        // Only redraw/recalculate if something was actually dragged
         renderer.element();
         renderer.results();
-        
         updateLessons(state.currentGaussPoint, state.nodes, state.force);
     },
 
-     FemMouseUp() { // Ensure recalculation on mouse up too if needed, though mousemove covers it
-        if (state.isDragging) { // Only recalculate if dragging actually happened
-             renderer.results(); // Final update
-             updateLessons(state.currentGaussPoint, state.nodes, state.force);
+     FemMouseUp(event) {
+        // GlobalMouseUp handles the state reset, this handler might be useful
+        // for snapping or other finalization specific to the FEM canvas,
+        // but currently not needed for node/force dragging.
+        if (state.isDragging) {
+            // console.log("FEM Up/End");
         }
-        state.isDragging = false;
-        state.selectedNode = null;
-        state.force.isSelected = false;
-        state.force.dragStart = null;
+        // Reset flags are handled globally by GlobalMouseUp
     },
 
     RefMouseDown(event) {
-        const mousePos = this.getMousePos(canvases.reference, event);
+        const pos = this.getEventPos(canvases.reference, event);
         const gaussCanvasPoint = coordConversion.referenceToCanvas(
             state.currentGaussPoint.xi,
             state.currentGaussPoint.eta,
             canvases.reference
         );
 
-        const hitRadius = 15;
-        const dx = mousePos.x - gaussCanvasPoint.x;
-        const dy = mousePos.y - gaussCanvasPoint.y;
+        // Use a slightly larger radius for touch targets
+        const hitRadius = (event.type.startsWith('touch')) ? 20 : 15;
+        const dx = pos.x - gaussCanvasPoint.x;
+        const dy = pos.y - gaussCanvasPoint.y;
 
         if (dx * dx + dy * dy < hitRadius * hitRadius) {
             state.isDraggingGaussPoint = true;
-            event.preventDefault();
+            // No preventDefault here, wait for move to confirm drag intention
         }
     },
 
     RefMouseMove(event) {
         if (state.isDraggingGaussPoint) {
-            const mousePos = this.getMousePos(canvases.reference, event);
+             // Prevent scrolling/zooming on touch devices during drag
+             if (event.type === 'touchmove') {
+                 event.preventDefault();
+             }
+
+            const pos = this.getEventPos(canvases.reference, event);
 
             // Clamp mouse position within effective canvas area
-            const clampedX = Math.max(MARGIN, Math.min(mousePos.x, canvases.reference.width - MARGIN));
-            const clampedY = Math.max(MARGIN, Math.min(mousePos.y, canvases.reference.height - MARGIN));
+            const clampedX = Math.max(MARGIN, Math.min(pos.x, canvases.reference.width - MARGIN));
+            const clampedY = Math.max(MARGIN, Math.min(pos.y, canvases.reference.height - MARGIN));
 
             // Convert to reference coordinates
             const referenceCoords = coordConversion.mapToReference(
@@ -1287,111 +1406,106 @@ const handlers = {
             // Update Gauss point position
             state.currentGaussPoint.xi = referenceCoords.xi;
             state.currentGaussPoint.eta = referenceCoords.eta;
+             // Reset index when manually dragging away from a standard point
+             state.currentGaussPointIndex = null; // Or -1, depending on convention
 
-            // Redraw and update
+            // Redraw and update lessons
             renderer.reference();
             updateLessons(state.currentGaussPoint, state.nodes, state.force);
-
-            // Visual feedback
-            const ctx = canvases.reference.getContext('2d');
-            const gaussCanvasPoint = coordConversion.referenceToCanvas(
-                state.currentGaussPoint.xi,
-                state.currentGaussPoint.eta,
-                canvases.reference
-            );
-            ctx.beginPath();
-            ctx.arc(gaussCanvasPoint.x, gaussCanvasPoint.y, 3, 0, Math.PI * 2);
-            ctx.fillStyle = 'rgba(255, 0, 255, 0.7)';
-            ctx.fill();
         }
     },
 
-    RefMouseUp() {
+    RefMouseUp(event) {
         if (state.isDraggingGaussPoint) {
+            // Reset drag state immediately
             state.isDraggingGaussPoint = false;
+            // console.log("Ref Up/End");
 
-            const threshold = 0.2;
-            let closestPoint = null;
+            // --- Snap Logic ---
+            const threshold = 0.2; // Snap distance in reference coordinates
+            let closestPointInfo = null;
             let minDistance = Infinity;
 
-            state.standardGaussPoints.forEach(point => {
+            state.standardGaussPoints.forEach((point, index) => {
                 const dx = point.xi - state.currentGaussPoint.xi;
                 const dy = point.eta - state.currentGaussPoint.eta;
                 const distance = Math.sqrt(dx * dx + dy * dy);
 
                 if (distance < minDistance) {
                     minDistance = distance;
-                    closestPoint = point;
+                    closestPointInfo = { point, index };
                 }
             });
 
-            // Snap to closest point if within threshold
-            if (minDistance < threshold) {
-                state.currentGaussPoint.xi = closestPoint.xi;
-                state.currentGaussPoint.eta = closestPoint.eta;
+            // Snap to closest standard point if within threshold
+            if (closestPointInfo && minDistance < threshold) {
+                state.currentGaussPoint.xi = closestPointInfo.point.xi;
+                state.currentGaussPoint.eta = closestPointInfo.point.eta;
+                state.currentGaussPointIndex = closestPointInfo.index; // Store the index of the snapped point
+                // Redraw and update after snapping
                 renderer.reference();
                 updateLessons(state.currentGaussPoint, state.nodes, state.force);
             }
+            // --- End Snap Logic ---
         }
+         // Reset flags are handled globally by GlobalMouseUp
     },
 
-    getMousePos(canvas, evt) {
-        const rect = canvas.getBoundingClientRect();
-        return {
-            x: evt.clientX - rect.left,
-            y: evt.clientY - rect.top
-        };
-    },
+    // --- Helper Methods ---
 
-    findSelectedNode(mousePos, canvas) {
-        return state.nodes.findIndex(node => {
+    findSelectedNode(pos, canvas) {
+        // Increase hit radius slightly for touch
+        // NODE_RADIUS should be defined globally or passed in
+        const effectiveNodeRadius = (event.type && event.type.startsWith('touch'))
+            ? NODE_RADIUS * 1.5
+            : NODE_RADIUS;
+
+        return state.nodes.findIndex(node => { // No filter based on index needed here
             const canvasPos = coordConversion.physicalToCanvas(node, canvas);
-            const distance = Math.sqrt(
-                Math.pow(canvasPos.x - mousePos.x, 2) +
-                Math.pow(canvasPos.y - mousePos.y, 2)
-            );
-            return distance < NODE_RADIUS * 2;
+            const distance = Math.hypot(canvasPos.x - pos.x, canvasPos.y - pos.y);
+            return distance < effectiveNodeRadius;
         });
     },
 
-    isForceArrowSelected(mousePos) {
+    isForceArrowSelected(pos) {
         const node1Canvas = coordConversion.physicalToCanvas(state.nodes[1], canvases.fem);
         const arrowEndX = node1Canvas.x + state.force.getDisplayLength() * Math.cos(state.force.angle);
         const arrowEndY = node1Canvas.y + state.force.getDisplayLength() * Math.sin(state.force.angle);
 
-        const distToArrowEnd = Math.hypot(
-            mousePos.x - arrowEndX,
-            mousePos.y - arrowEndY
-        );
-
+        const distToArrowEnd = Math.hypot(pos.x - arrowEndX, pos.y - arrowEndY);
+        // FORCE_ARROW.HANDLE.HIT_RADIUS should be defined globally or passed in
         return distToArrowEnd < FORCE_ARROW.HANDLE.HIT_RADIUS;
     },
 
-    initializeForceArrowDrag(mousePos) {
+    initializeForceArrowDrag(pos) {
         state.force.isSelected = true;
         state.force.dragStart = {
-            x: mousePos.x,
-            y: mousePos.y,
+            x: pos.x,
+            y: pos.y,
             angle: state.force.angle,
             length: state.force.length
         };
-        state.isDragging = true;
+        state.isDragging = true; // Set the general dragging flag
+        // console.log("Dragging force arrow started");
     },
 
     initializeNodeDrag(nodeIndex) {
+        // No need to check nodeIndex against 2 or 3 here anymore
         state.selectedNode = nodeIndex;
-        state.isDragging = true;
+        state.isDragging = true; // Set the general dragging flag
+        // console.log(`Dragging node ${nodeIndex + 1} started`);
     },
 
-    updateForceArrow(mousePos) {
+    updateForceArrow(pos) {
         const node1Canvas = coordConversion.physicalToCanvas(state.nodes[1], canvases.fem);
-        const dx = mousePos.x - node1Canvas.x;
-        const dy = mousePos.y - node1Canvas.y;
+        const dx = pos.x - node1Canvas.x;
+        const dy = pos.y - node1Canvas.y;
 
         // Update angle
         state.force.angle = Math.atan2(dy, dx);
 
         // Calculate and constrain length
+        // FORCE_ARROW constants should be defined globally or passed in
         const rawLength = Math.hypot(dx, dy);
         const scaledLength = rawLength / FORCE_ARROW.SCALE_RATIO;
         state.force.length = this.constrainValue(
@@ -1401,19 +1515,21 @@ const handlers = {
         );
     },
 
-    updateNodePosition(mousePos) {
-        const physicalPos = coordConversion.canvasToPhysical(mousePos, canvases.fem);
-        const currentNode = state.nodes[state.selectedNode];
-        // const smoothingFactor = 0.8; // Remove smoothing
+    updateNodePosition(pos) {
+        // Ensure a valid node is selected (redundant check, but safe)
+        if (state.selectedNode === null) return; // Removed the check for index 2 or 3
 
-        currentNode.x = this.constrainValue(physicalPos.x, 0, 1); // Direct mapping
-        currentNode.y = this.constrainValue(physicalPos.y, 0, 1); // Direct mapping
+        const physicalPos = coordConversion.canvasToPhysical(pos, canvases.fem);
+        const currentNode = state.nodes[state.selectedNode];
+
+        // Apply constraints (e.g., keep within 0-1 physical space)
+        currentNode.x = this.constrainValue(physicalPos.x, 0, 1);
+        currentNode.y = this.constrainValue(physicalPos.y, 0, 1);
     },
 
     constrainValue(value, min, max) {
         return Math.max(min, Math.min(max, value));
     }
-
 };
 
 // Canvas management
@@ -1462,25 +1578,42 @@ const canvasManager = {
         canvases.contexts.result = canvases.result.getContext('2d');
 
         // Set initial sizes
-        this.resizeAll();
+        this.resizeAll(); // Call before adding listeners potentially
 
-        // Add event listeners
+        // --- Add Event Listeners ---
         window.addEventListener('resize', () => this.resizeAll());
+
+        // -- Mouse Listeners --
         canvases.fem.addEventListener('mousedown', (e) => handlers.FemMouseDown(e));
         canvases.fem.addEventListener('mousemove', (e) => handlers.FemMouseMove(e));
-        canvases.fem.addEventListener('mouseup', (e) => handlers.FemMouseUp());
-        // Add mouseleave for femCanvas if needed to stop dragging
-        canvases.fem.addEventListener('mouseleave', (e) => handlers.FemMouseUp()); // Treat leave as mouse up
+        canvases.fem.addEventListener('mouseup', (e) => handlers.FemMouseUp(e));
+        canvases.fem.addEventListener('mouseleave', (e) => handlers.FemMouseUp(e)); // Treat leave as up
 
         canvases.reference.addEventListener('mousedown', (e) => handlers.RefMouseDown(e));
         canvases.reference.addEventListener('mousemove', (e) => handlers.RefMouseMove(e));
-        canvases.reference.addEventListener('mouseup', (e) => handlers.RefMouseUp());
-        // Add mouseleave for refCanvas if needed
-        canvases.reference.addEventListener('mouseleave', (e) => handlers.RefMouseUp()); // Treat leave as mouse up
+        canvases.reference.addEventListener('mouseup', (e) => handlers.RefMouseUp(e));
+        canvases.reference.addEventListener('mouseleave', (e) => handlers.RefMouseUp(e)); // Treat leave as up
+
+        document.addEventListener('mouseup', (e) => handlers.GlobalMouseUp(e)); // Global mouse up
+
+        // -- Touch Listeners --
+        // Use passive: false to allow preventDefault in move handlers
+        canvases.fem.addEventListener('touchstart', (e) => handlers.FemMouseDown(e), { passive: true }); // Start doesn't need preventDefault immediately
+        canvases.fem.addEventListener('touchmove', (e) => handlers.FemMouseMove(e), { passive: false });
+        canvases.fem.addEventListener('touchend', (e) => handlers.FemMouseUp(e));
+        canvases.fem.addEventListener('touchcancel', (e) => handlers.FemMouseUp(e)); // Treat cancel like end
+
+        canvases.reference.addEventListener('touchstart', (e) => handlers.RefMouseDown(e), { passive: true }); // Start doesn't need preventDefault immediately
+        canvases.reference.addEventListener('touchmove', (e) => handlers.RefMouseMove(e), { passive: false });
+        canvases.reference.addEventListener('touchend', (e) => handlers.RefMouseUp(e));
+        canvases.reference.addEventListener('touchcancel', (e) => handlers.RefMouseUp(e)); // Treat cancel like end
+
+        document.addEventListener('touchend', (e) => handlers.GlobalMouseUp(e)); // Global touch end
+        document.addEventListener('touchcancel', (e) => handlers.GlobalMouseUp(e)); // Global touch cancel
 
 
-        // Initialize buttons
-        controls.initialize(); // This now sets up all controls including view buttons
+        // Initialize buttons and controls AFTER setting up canvas listeners
+        controls.initialize();
 
         // Initial render
         renderer.element();
@@ -1491,8 +1624,6 @@ const canvasManager = {
     }
 };
 
-// Make sure GlobalMouseUp handles cases where mouseup happens outside canvases
-document.addEventListener('mouseup', handlers.GlobalMouseUp);
 window.addEventListener('load', () => {
     // Ensure initialization runs even if DOMContentLoaded fired early
     if (!canvases.fem) {

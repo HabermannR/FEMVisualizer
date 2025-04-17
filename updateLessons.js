@@ -210,7 +210,7 @@ export function updateLessons(currentGaussPoint, nodes, forceArrow) {
                 title: 'Node Coordinates'
             }
         )}
-        <p>You can move the nodes and the force arrow in the left Physical Element view, and the middle Gauss point in the middle Reference Element view. Try it, it will update the formulas in the bottom automatically.</p>
+        <p>You can move the nodes and the force arrow in the left Physical Element view, and the middle Gauss point in the middle
         <p>Attention, for the graphics, the y axis is inverted, meaning -1, -1 is the left, top corner!</p>
     `);
 
@@ -661,38 +661,69 @@ export function updateLessons(currentGaussPoint, nodes, forceArrow) {
 
         ${(() => {
             const results = calculateStrainAndStress(nodes, displacements);
-            return results.map((result, idx) => `
-                <div class="gauss-point-results">
-                    <h5>Gauss Point ${idx + 1} (ξ=${result.gaussPoint.xi.toFixed(4)}, η=${result.gaussPoint.eta.toFixed(4)})</h5>
-                    <div class="matrix-equation-container">
-                        ${formatter.createMatrix([
-                            [result.strain.εxx],
-                            [result.strain.εyy],
-                            [result.strain.γxy]
-                        ], {
-                            rowHeaders: ['εxx', 'εyy', 'εxy'],
-                            title: 'Strain Components',
-                            precision: 6,
-                            customClasses: ['matrix-container']
-                        })}
+            if (!results || results.length === 0) {
+                return '<p>No results calculated.</p>'; // Handle empty results case
+            }
 
-                        ${formatter.createMatrix([
-                            [result.stress.σxx],
-                            [result.stress.σyy],
-                            [result.stress.τxy]
-                        ], {
-                            rowHeaders: ['σxx', 'σyy', 'σxy'],
-                            title: 'Stress Components (MPa)',
-                            precision: 1,
-                            customClasses: ['matrix-container']
-                        })}
-                    </div>
+            return results.map((result, idx) => {
+                // Check if this result object indicates an error
+                if (result.error) {
+                    // Render an error message for this Gauss point
+                    return `
+                        <div class="gauss-point-results gauss-point-error">
+                            <h5>Gauss Point ${idx + 1} (ξ=${result.gaussPoint.xi.toFixed(4)}, η=${result.gaussPoint.eta.toFixed(4)})</h5>
+                            <div class="error-message">
+                                Calculation Error: ${result.error}
+                            </div>
+                        </div>
+                    `;
+                } else if (result.strain && result.stress && result.vonMises !== undefined) {
+                    // If no error and data seems valid, render the normal results
+                    // (Added checks for strain/stress objects existence for extra safety)
+                    return `
+                        <div class="gauss-point-results">
+                            <h5>Gauss Point ${idx + 1} (ξ=${result.gaussPoint.xi.toFixed(4)}, η=${result.gaussPoint.eta.toFixed(4)})</h5>
+                            <div class="matrix-equation-container">
+                                ${formatter.createMatrix([
+                                    [result.strain.εxx],
+                                    [result.strain.εyy],
+                                    [result.strain.γxy]
+                                ], {
+                                    rowHeaders: ['εxx', 'εyy', 'εxy'],
+                                    title: 'Strain Components',
+                                    precision: 6,
+                                    customClasses: ['matrix-container']
+                                })}
 
-                    <div class="von-mises-value">
-                        von Mises Stress: ${result.vonMises.toFixed(2)} MPa
-                    </div>
-                </div>
-            `).join('')
+                                ${formatter.createMatrix([
+                                    [result.stress.σxx],
+                                    [result.stress.σyy],
+                                    [result.stress.τxy]
+                                ], {
+                                    rowHeaders: ['σxx', 'σyy', 'σxy'],
+                                    title: 'Stress Components (MPa)',
+                                    precision: 1,
+                                    customClasses: ['matrix-container']
+                                })}
+                            </div>
+
+                            <div class="von-mises-value">
+                                von Mises Stress: ${result.vonMises.toFixed(2)} MPa
+                            </div>
+                        </div>
+                    `;
+                } else {
+                     // Handle unexpected result format (neither error nor valid data)
+                     return `
+                        <div class="gauss-point-results gauss-point-warning">
+                            <h5>Gauss Point ${idx + 1} (ξ=${result.gaussPoint?.xi?.toFixed(4) ?? 'N/A'}, η=${result.gaussPoint?.eta?.toFixed(4) ?? 'N/A'})</h5>
+                            <div class="warning-message">
+                                Warning: Unexpected data format for this point.
+                            </div>
+                        </div>
+                    `;
+                }
+            }).join('');
         })()}
 
         <div class="stress-explanation">
