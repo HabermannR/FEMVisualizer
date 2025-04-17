@@ -210,6 +210,7 @@ export function updateLessons(currentGaussPoint, nodes, forceArrow) {
                 title: 'Node Coordinates'
             }
         )}
+        <p>You can move the nodes and the force arrow in the left Physical Element view, and the middle Gauss point in the middle Reference Element view. Try it, it will update the formulas in the bottom automatically.</p>
         <p>Attention, for the graphics, the y axis is inverted, meaning -1, -1 is the left, top corner!</p>
     `);
 
