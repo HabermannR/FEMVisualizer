@@ -81,7 +81,7 @@ const FORCE_ARROW = {
 };
 
 // --- Default Quadrature Rule ---
-const DEFAULT_QUADRATURE_RULE_NAME = '2x2'; // Keep 2x2 as default
+const DEFAULT_QUADRATURE_RULE_NAME = '1x1'; // Keep 2x2 as default
 
 // State
 const state = {
@@ -206,7 +206,7 @@ const controls = {
             state.currentGaussPoint = {...state.standardGaussPoints[state.currentGaussPointIndex]};
 
             renderer.reference();
-            updateLessons(state.currentGaussPoint, state.nodes, state.force);
+            updateLessons(state.currentGaussPoint, state.nodes, state.force, state.activeQuadratureRuleName);
         },
 
         // --- NEW HANDLER for switching Gauss rule ---
@@ -225,7 +225,7 @@ const controls = {
             controls.updateButtons(); // Update the new button's text/state
             renderer.reference(); // Redraw reference with new points
             renderer.results();   // Recalculate and redraw results with new rule
-            updateLessons(state.currentGaussPoint, state.nodes, state.force); // Update lessons with new point
+            updateLessons(state.currentGaussPoint, state.nodes, state.force, state.activeQuadratureRuleName); // Update lessons with new point
         },
 
         viewChange(type) {
@@ -970,49 +970,27 @@ const renderer = {
 
         // --- 1. Calculate Displacements and Strain/Stress using ACTIVE Gauss rule ---
         const activeGaussPoints = state.standardGaussPoints; // Get points via getter
-        console.log(state.activeQuadratureRuleName)
         const displacements = calculateDisplacements(state.nodes, state.force, MaterialProps, state.activeQuadratureRuleName);
-        // Ensure displacements is always a valid array, even if calculation fails
+        // Ensure displacements is always a valid array
          if (!displacements || displacements.length !== 4) {
              console.error("Failed to calculate displacements.");
-             // Optionally draw meshes without contours or return
               this.drawUndeformedMesh();
               this.drawDeformedMesh(state.nodes); // Draw undeformed as deformed
              return;
          }
         const strainStressResults = calculateStrainAndStress(state.nodes, displacements, MaterialProps, state.activeQuadratureRuleName);
-          if (!strainStressResults || strainStressResults.length !== activeGaussPoints.length) { // Check length matches rule
-             console.error("Failed to calculate strain/stress.");
-             // Optionally draw meshes without contours or return
+          if (!strainStressResults || strainStressResults.length !== activeGaussPoints.length) {
+             console.error("Failed to calculate strain/stress or length mismatch.");
               this.drawUndeformedMesh();
               this.drawDeformedMesh(state.nodes); // Draw undeformed as deformed
               return;
          }
 
-        // Store for potential later use (e.g., Gauss point display)
+        // Store for potential later use
         state.latestResults.displacements = displacements;
-        state.latestResults.strainStress = strainStressResults; // This now has 1 or 4 items
+        state.latestResults.strainStress = strainStressResults;
 
-
-        // --- 2. Determine Nodal Values for Current View ---
-        const currentView = state.view;
-        let nodalValues;
-        let componentKey = null; // For extrapolation
-
-        if (currentView.startsWith('U')) {
-            if (currentView === 'U1') nodalValues = displacements.map(d => d.x);
-            else if (currentView === 'U2') nodalValues = displacements.map(d => d.y);
-            else { // Umag
-                nodalValues = displacements.map(d => Math.sqrt(d.x*d.x + d.y*d.y));
-            }
-        } else {
-            // Extrapolate Stress/Strain
-             componentKey = currentView; // e.g., 'Sxx', 'Eyy'
-             nodalValues = extrapolateGaussToNodes(strainStressResults, componentKey);
-             state.latestResults.nodalValues[componentKey] = nodalValues; // Cache if needed
-        }
-
-        // --- 3. Prepare Deformed Geometry ---
+        // --- 2. Prepare Deformed Geometry ---
         const scaledNodes = state.nodes.map((node, i) => ({
             x: node.x + displacements[i].x * DISPLACEMENT_SCALE_FACTOR,
             y: node.y + displacements[i].y * DISPLACEMENT_SCALE_FACTOR
@@ -1021,110 +999,199 @@ const renderer = {
             coordConversion.physicalToCanvas(node, canvas)
         );
 
-        // --- 4. Render Contour Plot (Pixel Loop) ---
+        // Get bounding box of deformed element for drawing later
         const minX = Math.min(...canvasNodes.map(n => n.x));
         const maxX = Math.max(...canvasNodes.map(n => n.x));
         const minY = Math.min(...canvasNodes.map(n => n.y));
         const maxY = Math.max(...canvasNodes.map(n => n.y));
-
         const width = Math.ceil(maxX - minX);
         const height = Math.ceil(maxY - minY);
 
-        // Check for zero width/height (can happen if element is degenerate)
+        // Check for zero width/height
          if (width <= 0 || height <= 0) {
-             console.warn("Degenerate element geometry, skipping contour plot.");
+             console.warn("Degenerate element geometry, skipping contour/fill.");
               this.drawUndeformedMesh();
               this.drawDeformedMesh(scaledNodes); // Still draw deformed shape
              return;
          }
 
+        // --- 3. Determine View Type and Get Values ---
+        const currentView = state.view;
+        const isStressStrainView = currentView.startsWith('S') || currentView.startsWith('E') || currentView === 'VonMises'; // Add other relevant stress/strain views if needed
+        const is1x1Rule = state.activeQuadratureRuleName === '1x1';
+        const viewConfig = controls.handlers.getCurrentViewConfig(); // Get scaling factor etc.
 
-        const pixelData = new Uint8ClampedArray(width * height * 4);
-        let minValue = Infinity;
-        let maxValue = -Infinity;
-        const values = new Array(width * height).fill(undefined); // Use undefined marker
+        // --- 4. Special Rendering for 1x1 Gauss Rule on Stress/Strain ---
+        if (is1x1Rule && isStressStrainView) {
+            // Only one value exists, directly from the single Gauss point result
+            let componentKey = currentView;
+            let nodalValues = extrapolateGaussToNodes(strainStressResults, componentKey);
+            const value = nodalValues[0];
 
-        // Find Min/Max by interpolating at nodes first (faster approximation)
-         // or use the actual nodalValues directly
-         minValue = Math.min(...nodalValues);
-         maxValue = Math.max(...nodalValues);
-         // Refine min/max in the loop if needed, but nodal values are often sufficient
 
-        for(let y = 0; y < height; y++) {
-            for(let x = 0; x < width; x++) {
-                const canvasX = x + minX;
-                const canvasY = y + minY;
+            // Draw the deformed element shape filled with yellow
+            ctx.fillStyle = '#ffffbf';
+            ctx.beginPath();
+            ctx.moveTo(canvasNodes[0].x, canvasNodes[0].y);
+            for (let i = 1; i < canvasNodes.length; i++) {
+                ctx.lineTo(canvasNodes[i].x, canvasNodes[i].y);
+            }
+            ctx.closePath();
+            ctx.fill();
 
-                // Check if pixel is roughly inside the element polygon (optimization)
-                // Optional, but can speed up large canvases
-                // if (!isPointInPolygon({x: canvasX, y: canvasY}, canvasNodes)) continue;
+            // --- Draw Overlays ---
+            this.drawUndeformedMesh();
+            this.drawDeformedMesh(scaledNodes);
+            this.drawDisplacementScale(); // Keep this maybe? Or hide if not relevant?
 
-                const physX = canvasX / canvas.width;
-                const physY = canvasY / canvas.height;
+            // --- Draw Legend ---
+            if (viewConfig) {
+                 // For 1x1, min and max are the same single value
+                 this.drawLegend(ctx, canvas, value * viewConfig.factor, value * viewConfig.factor, viewConfig.dot);
+            }
 
-                // Map canvas pixel to xi, eta in DEFORMED element
-                const result = coordConversion.findXiEta(physX, physY, scaledNodes);
+            // --- Draw Gauss Point Value (Optional) ---
+            // This will draw the single value at the center
+             this.drawGaussPointValues(ctx, canvas, scaledNodes, state.latestResults.strainStress, viewConfig);
 
-                if (result) {
-                    const { xi, eta } = result;
-                    // Ensure xi, eta are within bounds (or close enough) after inversion
-                    if (Math.abs(xi) <= 1.01 && Math.abs(eta) <= 1.01) {
-                        const N = calculateShapeFunctions(xi, eta);
-                        let value = 0;
-                        for(let i = 0; i < 4; i++) {
-                            value += N[i] * nodalValues[i];
+
+        }
+        // --- 5. Standard Rendering for Displacements OR 2x2 Rule ---
+        else {
+            let nodalValues;
+            let componentKey = null;
+
+            if (currentView.startsWith('U')) {
+                if (currentView === 'U1') nodalValues = displacements.map(d => d.x);
+                else if (currentView === 'U2') nodalValues = displacements.map(d => d.y);
+                else { // Umag
+                    nodalValues = displacements.map(d => Math.sqrt(d.x*d.x + d.y*d.y));
+                }
+                 // Note: For 1x1 displacement views, we still interpolate from nodes.
+                 // The displacement vector is defined nodally.
+            } else {
+                // Extrapolate Stress/Strain (This path now only used for 2x2 rule)
+                 componentKey = currentView; // e.g., 'Sxx', 'Eyy'
+                 nodalValues = extrapolateGaussToNodes(strainStressResults, componentKey);
+                 state.latestResults.nodalValues[componentKey] = nodalValues; // Cache if needed
+            }
+
+             // Check if nodalValues calculation failed (e.g., extrapolation failed)
+             if (!nodalValues || nodalValues.length !== 4) {
+                 console.error(`Failed to get or extrapolate nodal values for view ${currentView}.`);
+                 this.drawUndeformedMesh();
+                 this.drawDeformedMesh(scaledNodes);
+                 return;
+             }
+
+
+            // --- Render Contour Plot (Pixel Loop) ---
+            const pixelData = new Uint8ClampedArray(width * height * 4);
+            let minValue = Infinity;
+            let maxValue = -Infinity;
+            const values = new Array(width * height).fill(undefined); // Use undefined marker
+
+             // Use nodal values to quickly estimate min/max
+             minValue = Math.min(...nodalValues);
+             maxValue = Math.max(...nodalValues);
+
+             // Refine min/max in the loop - important for accurate legend/coloring
+             // Re-initialize here before loop refinement
+             let refinedMinValue = Infinity;
+             let refinedMaxValue = -Infinity;
+             let foundValue = false; // Track if any pixel got a value
+
+
+            for(let y = 0; y < height; y++) {
+                for(let x = 0; x < width; x++) {
+                    const canvasX = x + minX;
+                    const canvasY = y + minY;
+
+                    // Map canvas pixel to xi, eta in DEFORMED element
+                    // Convert canvas coords back to physical [0,1] range for findXiEta
+                    const physX = canvasX / canvas.width;
+                    const physY = canvasY / canvas.height;
+                    const result = coordConversion.findXiEta(physX, physY, scaledNodes);
+
+                    if (result) {
+                        const { xi, eta } = result;
+                        // Ensure xi, eta are within bounds (or very close)
+                        if (Math.abs(xi) <= 1.01 && Math.abs(eta) <= 1.01) {
+                            const N = calculateShapeFunctions(xi, eta);
+                            let value = 0;
+                            for(let i = 0; i < 4; i++) {
+                                value += N[i] * nodalValues[i];
+                            }
+
+                            const index = y * width + x;
+                            values[index] = value; // Store value
+                            // Refine min/max based on calculated pixel values
+                            refinedMinValue = Math.min(refinedMinValue, value);
+                            refinedMaxValue = Math.max(refinedMaxValue, value);
+                            foundValue = true;
                         }
-
-                        const index = y * width + x;
-                        values[index] = value; // Store value
-                        // Update min/max if needed (safer than just using nodal extremes)
-                        minValue = Math.min(minValue, value);
-                        maxValue = Math.max(maxValue, value);
                     }
                 }
             }
-        }
 
-        // Second pass: create color data
-        const valueRange = maxValue - minValue;
-        for(let y = 0; y < height; y++) {
-            for(let x = 0; x < width; x++) {
-                const index = y * width + x;
-                const value = values[index]; // Retrieve stored value
+             // Use refined min/max if values were found, otherwise stick to nodal extremes
+             if (foundValue) {
+                 minValue = refinedMinValue;
+                 maxValue = refinedMaxValue;
+             }
 
-                if (value !== undefined) { // Check if value was calculated
-                    const normalizedValue = valueRange === 0 ? 0.5 : (value - minValue) / valueRange;
-                    const color = this.getDisplacementColor(normalizedValue); // Reusing color scheme
 
-                    const pixelIndex = index * 4;
-                    pixelData[pixelIndex] = color.r;
-                    pixelData[pixelIndex + 1] = color.g;
-                    pixelData[pixelIndex + 2] = color.b;
-                    pixelData[pixelIndex + 3] = 255; // Fully opaque
+            // Second pass: create color data
+            const valueRange = maxValue - minValue;
+            for(let y = 0; y < height; y++) {
+                for(let x = 0; x < width; x++) {
+                    const index = y * width + x;
+                    const value = values[index]; // Retrieve stored value
+
+                    if (value !== undefined) { // Check if value was calculated
+                        const normalizedValue = valueRange === 0 ? 0.5 : (value - minValue) / valueRange;
+                        // Use the standard color function
+                        const color = this.getDisplacementColor(normalizedValue);
+
+                        const pixelIndex = index * 4;
+                        pixelData[pixelIndex] = color.r;
+                        pixelData[pixelIndex + 1] = color.g;
+                        pixelData[pixelIndex + 2] = color.b;
+                        pixelData[pixelIndex + 3] = 255; // Fully opaque
+                    }
                 }
-                 // else: leave pixel transparent (or set a background color)
             }
-        }
 
-        // Create and draw the image data
-        const imageData = new ImageData(pixelData, width, height);
-        ctx.putImageData(imageData, minX, minY);
+            // Create and draw the image data
+            const imageData = new ImageData(pixelData, width, height);
+            // Use try-catch for putImageData as it can fail with large/invalid dimensions
+             try {
+                ctx.putImageData(imageData, minX, minY);
+             } catch (e) {
+                 console.error("Error drawing contour image data:", e);
+                 // Fallback: just draw meshes
+                  this.drawUndeformedMesh();
+                  this.drawDeformedMesh(scaledNodes);
+                 return;
+             }
 
-        // --- 5. Draw Overlays ---
-        this.drawUndeformedMesh();
-        this.drawDeformedMesh(scaledNodes); // Use the calculated scaledNodes
-        this.drawDisplacementScale(); // Keep this relevant
 
-        // --- 6. Draw Legend ---
-        const viewConfig = controls.handlers.getCurrentViewConfig();
-        if (viewConfig) {
-            // Apply scaling factor for display units (e.g., Pa -> MPa)
-            this.drawLegend(ctx, canvas, minValue * viewConfig.factor, maxValue * viewConfig.factor, viewConfig.dot);
-        }
+            // --- Draw Overlays ---
+            this.drawUndeformedMesh();
+            this.drawDeformedMesh(scaledNodes);
+            this.drawDisplacementScale();
 
-        // --- 7. Draw Gauss Point Values (Optional Enhancement) ---
-         this.drawGaussPointValues(ctx, canvas, scaledNodes, state.latestResults.strainStress, viewConfig);
+            // --- Draw Legend ---
+            if (viewConfig) {
+                 this.drawLegend(ctx, canvas, minValue * viewConfig.factor, maxValue * viewConfig.factor, viewConfig.dot);
+            }
 
+            // --- Draw Gauss Point Values (Optional) ---
+            // For 2x2, this will draw 4 values if viewing stress/strain
+            // For displacement views, it might draw values based on nodal displacements at Gauss coords
+             this.drawGaussPointValues(ctx, canvas, scaledNodes, state.latestResults.strainStress, viewConfig);
+
+        } // End standard rendering block
 
     }, // End of renderer.results
 
@@ -1406,7 +1473,7 @@ const handlers = {
         // Only redraw/recalculate if something was actually dragged
         renderer.element();
         renderer.results();
-        updateLessons(state.currentGaussPoint, state.nodes, state.force);
+        updateLessons(state.currentGaussPoint, state.nodes, state.force, state.activeQuadratureRuleName);
     },
 
      FemMouseUp(event) {
@@ -1466,7 +1533,7 @@ const handlers = {
 
             // Redraw and update lessons
             renderer.reference();
-            updateLessons(state.currentGaussPoint, state.nodes, state.force);
+            updateLessons(state.currentGaussPoint, state.nodes, state.force, state.activeQuadratureRuleName);
         }
     },
 
@@ -1499,7 +1566,7 @@ const handlers = {
                 state.currentGaussPointIndex = closestPointInfo.index; // Store the index of the snapped point
                 // Redraw and update after snapping
                 renderer.reference();
-                updateLessons(state.currentGaussPoint, state.nodes, state.force);
+                updateLessons(state.currentGaussPoint, state.nodes, state.force, state.activeQuadratureRuleName);
             }
             // --- End Snap Logic ---
         }
