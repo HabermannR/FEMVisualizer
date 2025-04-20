@@ -57,6 +57,7 @@ function updateSection(sectionId, content) {
 }
 
 export function updateLessons(currentGaussPoint, nodes, forceArrow) {
+    return
     const {xi, eta} = currentGaussPoint;
     
     const N = calculateShapeFunctions(xi, eta);

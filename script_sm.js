@@ -12,18 +12,20 @@ import {
     calculateDisplacements,
     calculateStrainAndStress,
     extrapolateGaussToNodes,
-    standardGaussPoints
+    gaussQuadratureRules
 } from './calculation.js';
-
-
-// reenable element distortion metric
-// todo Abaqus export?
 
 
 // Constants
 const PHYSICAL_SPACE = {
     width: 1,
     height: 1
+};
+
+const MaterialProps = {
+    E: 210000, // Young's modulus
+    nu: 0.3,   // Poisson's ratio
+    t: 1.0    // Thickness (assuming plane stress/strain context needs it)
 };
 
 const DISPLACEMENT_SCALE_FACTOR = 30;
@@ -78,6 +80,8 @@ const FORCE_ARROW = {
     SCALE_RATIO: 0.25
 };
 
+// --- Default Quadrature Rule ---
+const DEFAULT_QUADRATURE_RULE_NAME = '2x2'; // Keep 2x2 as default
 
 // State
 const state = {
@@ -87,10 +91,13 @@ const state = {
     selectedShapeFunction: 0,
     showingDerivative: false,
     derivativeType: '',
-    currentGaussPoint: { xi: 0, eta: 0 },
-    currentGaussPointIndex: 0,
+    activeQuadratureRuleName: DEFAULT_QUADRATURE_RULE_NAME, // Store the name ('1x1' or '2x2')
+    get standardGaussPoints() { // Use a getter to ensure it's always up-to-date
+        return gaussQuadratureRules[this.activeQuadratureRuleName];
+    },
+    currentGaussPoint: { xi: 0, eta: 0 }, // Will be updated when rule changes
+    currentGaussPointIndex: 0, // Will be updated when rule changes
     isDraggingGaussPoint: false,
-    standardGaussPoints: standardGaussPoints,
     refNodes: REFERENCE_NODES,
     view: 'U1',
     force: {
@@ -102,13 +109,15 @@ const state = {
             return this.length * FORCE_ARROW.SCALE_RATIO;
         }
     },
-    // Add a place to store latest results if needed, or calculate on demand
     latestResults: {
         displacements: null,
         strainStress: null,
-        nodalValues: {} // To store extrapolated nodal values
+        nodalValues: {}
     }
 };
+
+// --- Initialize currentGaussPoint based on the default rule ---
+state.currentGaussPoint = { ...state.standardGaussPoints[0] };
 
 // Canvas references
 const canvases = {
@@ -187,11 +196,36 @@ const controls = {
             controls.updateReferenceTitle();
         },
 
-        gaussPoint() {
-            state.currentGaussPointIndex = (state.currentGaussPointIndex + 1) % state.standardGaussPoints.length;
+        gaussPointCycle() { // Renamed to avoid conflict
+            // Use the getter to ensure we have the correct points
+            const numPoints = state.standardGaussPoints.length;
+            if (numPoints === 0) return; // Should not happen
+
+            state.currentGaussPointIndex = (state.currentGaussPointIndex + 1) % numPoints;
+            // Use getter again to get the correct point based on the *potentially* updated index/rule
             state.currentGaussPoint = {...state.standardGaussPoints[state.currentGaussPointIndex]};
+
             renderer.reference();
             updateLessons(state.currentGaussPoint, state.nodes, state.force);
+        },
+
+        // --- NEW HANDLER for switching Gauss rule ---
+        switchGaussRule() {
+            const currentRule = state.activeQuadratureRuleName;
+            const nextRule = currentRule === '1x1' ? '2x2' : '1x1';
+
+            state.activeQuadratureRuleName = nextRule;
+            // Reset Gauss point index and current point to the start of the new rule set
+            state.currentGaussPointIndex = 0;
+            state.currentGaussPoint = { ...state.standardGaussPoints[0] }; // Use getter
+
+            console.log(`Switched to ${nextRule} Gauss rule.`);
+
+            // Update UI and re-render/re-calculate
+            controls.updateButtons(); // Update the new button's text/state
+            renderer.reference(); // Redraw reference with new points
+            renderer.results();   // Recalculate and redraw results with new rule
+            updateLessons(state.currentGaussPoint, state.nodes, state.force); // Update lessons with new point
         },
 
         viewChange(type) {
@@ -254,6 +288,15 @@ const controls = {
         document.querySelectorAll('.derivative-button').forEach(button => {
             button.classList.toggle('selected', state.showingDerivative && button.dataset.type === state.derivativeType);
         });
+
+        // --- NEW: Update Gauss Rule Switch Button ---
+        const gaussRuleButton = document.querySelector('.gauss-rule-button');
+        if (gaussRuleButton) {
+            gaussRuleButton.textContent = `Rule: ${state.activeQuadratureRuleName}`;
+            // Optional: Add a class to indicate which rule is active if needed for styling
+            gaussRuleButton.classList.toggle('rule-1x1', state.activeQuadratureRuleName === '1x1');
+            gaussRuleButton.classList.toggle('rule-2x2', state.activeQuadratureRuleName === '2x2');
+        }
 
         // Update view buttons (replaces displacement buttons update)
         document.querySelectorAll('.view-button').forEach(button => {
@@ -320,9 +363,15 @@ const controls = {
         row1.appendChild(derivativeContainer);
         row1.appendChild(this.createSeparator());
 
-        // Gauss Button
-        const gaussButton = this.createButton('gauss-button', null, 'Cycle Gauss Pt');
-        row1.appendChild(gaussButton);
+        // --- NEW: Gauss Rule Switch Button ---
+        const gaussRuleButton = this.createButton('gauss-rule-button', null, `Rule: ${state.activeQuadratureRuleName}`);
+        row1.appendChild(gaussRuleButton);
+        row1.appendChild(this.createSeparator()); // Add separator after it
+        // --- END NEW ---
+
+        // Gauss Point Cycle Button
+        const gaussCycleButton = this.createButton('gauss-cycle-button', null, 'Cycle Gauss Pt'); // Changed class name slightly
+        row1.appendChild(gaussCycleButton);
 
         buttonContainer.appendChild(row1);
 
@@ -378,10 +427,16 @@ const controls = {
             );
         });
 
-        // Gauss button
-        const gaussButton = document.querySelector('.gauss-button');
-        if (gaussButton) {
-            gaussButton.addEventListener('click', () => this.handlers.gaussPoint());
+        // Gauss Rule Switch Button Listener
+        const gaussRuleButton = document.querySelector('.gauss-rule-button');
+        if (gaussRuleButton) {
+            gaussRuleButton.addEventListener('click', () => this.handlers.switchGaussRule());
+        }
+
+        // Gauss point cycle button
+        const gaussCycleButton = document.querySelector('.gauss-cycle-button'); // Use updated class name
+        if (gaussCycleButton) {
+            gaussCycleButton.addEventListener('click', () => this.handlers.gaussPointCycle()); // Use renamed handler
         }
 
         // View buttons (replaces displacement buttons)
@@ -913,8 +968,10 @@ const renderer = {
 
         ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-        // --- 1. Calculate Displacements and Strain/Stress ---
-        const displacements = calculateDisplacements(state.nodes, state.force);
+        // --- 1. Calculate Displacements and Strain/Stress using ACTIVE Gauss rule ---
+        const activeGaussPoints = state.standardGaussPoints; // Get points via getter
+        console.log(state.activeQuadratureRuleName)
+        const displacements = calculateDisplacements(state.nodes, state.force, MaterialProps, state.activeQuadratureRuleName);
         // Ensure displacements is always a valid array, even if calculation fails
          if (!displacements || displacements.length !== 4) {
              console.error("Failed to calculate displacements.");
@@ -923,8 +980,8 @@ const renderer = {
               this.drawDeformedMesh(state.nodes); // Draw undeformed as deformed
              return;
          }
-        const strainStressResults = calculateStrainAndStress(state.nodes, displacements);
-         if (!strainStressResults || strainStressResults.length !== 4) {
+        const strainStressResults = calculateStrainAndStress(state.nodes, displacements, MaterialProps, state.activeQuadratureRuleName);
+          if (!strainStressResults || strainStressResults.length !== activeGaussPoints.length) { // Check length matches rule
              console.error("Failed to calculate strain/stress.");
              // Optionally draw meshes without contours or return
               this.drawUndeformedMesh();
@@ -934,7 +991,7 @@ const renderer = {
 
         // Store for potential later use (e.g., Gauss point display)
         state.latestResults.displacements = displacements;
-        state.latestResults.strainStress = strainStressResults;
+        state.latestResults.strainStress = strainStressResults; // This now has 1 or 4 items
 
 
         // --- 2. Determine Nodal Values for Current View ---
@@ -1092,12 +1149,10 @@ const renderer = {
                 return; // Skip this iteration if result is missing
             }
 
-            // Use the gaussPoint data stored within the result if available, otherwise fallback
-            // This ensures we use the correct coordinates even if it's an error result
-            const gp = result.gaussPoint || state.standardGaussPoints[index];
+            const gp = result.gaussPoint; // Get GP info from the result object
             if (!gp || typeof gp.xi !== 'number' || typeof gp.eta !== 'number') {
-                console.warn(`[GP ${index + 1}] Skipping draw: Invalid or missing Gauss point coordinates.`);
-                return; // Cannot calculate position without valid GP coords
+                console.warn(`[GP ${index + 1}] Skipping draw: Invalid or missing Gauss point coordinates in result.`);
+                return;
             }
 
             let canvasPos;
@@ -1557,8 +1612,7 @@ const canvasManager = {
         this.resize(canvases.result);
         renderer.element();
         renderer.reference();
-        const displacements = calculateDisplacements(state.nodes, state.force);
-        renderer.results(displacements);
+        renderer.results();
     },
 
     initialize() {
